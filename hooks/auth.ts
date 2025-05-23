@@ -1,9 +1,39 @@
-import { useState, useEffect } from 'react';
-import { useMutation, useQuery } from 'convex/react';
+import { useState, useEffect, useRef, useCallback } from 'react';
+import { useMutation } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 
-// Simple state-based auth management
-let currentUser: any = null;
+// Define proper user type
+type User = {
+  id: string;
+  email: string;
+} | null;
+
+// Store user in localStorage for persistence across page refreshes
+const getStoredUser = (): User => {
+  if (typeof window !== 'undefined') {
+    try {
+      const stored = localStorage.getItem('currentUser');
+      return stored ? JSON.parse(stored) : null;
+    } catch (e) {
+      console.error('Error parsing stored user:', e);
+      return null;
+    }
+  }
+  return null;
+};
+
+let currentUser: User = getStoredUser();
+
+const updateCurrentUser = (user: User): void => {
+  currentUser = user;
+  if (typeof window !== 'undefined') {
+    if (user) {
+      localStorage.setItem('currentUser', JSON.stringify(user));
+    } else {
+      localStorage.removeItem('currentUser');
+    }
+  }
+};
 
 export function useSignUp() {
   const [isLoading, setIsLoading] = useState(false);
@@ -13,7 +43,9 @@ export function useSignUp() {
     setIsLoading(true);
     try {
       const result = await createUser({ email, password });
-      currentUser = { id: result.userId, email };
+      if (result) {
+        updateCurrentUser({ id: result.userId, email });
+      }
       setIsLoading(false);
       return result;
     } catch (error) {
@@ -33,7 +65,9 @@ export function useSignIn() {
     setIsLoading(true);
     try {
       const result = await loginUser({ email, password });
-      currentUser = { id: result.userId, email };
+      if (result) {
+        updateCurrentUser({ id: result.userId, email });
+      }
       setIsLoading(false);
       return result;
     } catch (error) {
@@ -51,10 +85,11 @@ export function useSignOut() {
   const signOut = async () => {
     try {
       await logout();
-      currentUser = null;
+      updateCurrentUser(null);
       return true;
     } catch (error) {
-      throw error;
+      console.error("Error signing out:", error);
+      return false;
     }
   };
 
@@ -62,14 +97,52 @@ export function useSignOut() {
 }
 
 export function useUser() {
-  const [user, setUser] = useState(currentUser);
+  const [user, setUser] = useState<User>(null);
   const [isLoading, setIsLoading] = useState(true);
+  const userRef = useRef(user);
+  
+  // Update reference when user changes
+  useEffect(() => {
+    userRef.current = user;
+  }, [user]);
+  
+  // Compare users safely
+  const areUsersEqual = useCallback((a: User, b: User) => {
+    if (a === null && b === null) return true;
+    if (a === null || b === null) return false;
+    return a.id === b.id && a.email === b.email;
+  }, []);
+
+  // Handle storage changes
+  const handleStorageChange = useCallback(() => {
+    const storedUser = getStoredUser();
+    if (!areUsersEqual(storedUser, userRef.current)) {
+      setUser(storedUser);
+    }
+  }, [areUsersEqual]);
   
   useEffect(() => {
-    // Check if user exists and update state
-    setUser(currentUser);
+    // Only set the user state on the client side
+    setUser(getStoredUser());
     setIsLoading(false);
-  }, []);
+
+    // Fix potential null reference errors
+    if (typeof window !== 'undefined') {
+      window.addEventListener('storage', handleStorageChange);
+      
+      const checkUserInterval = setInterval(() => {
+        if (!areUsersEqual(currentUser, userRef.current)) {
+          setUser(currentUser);
+        }
+      }, 1000);
+      
+      return () => {
+        window.removeEventListener('storage', handleStorageChange);
+        clearInterval(checkUserInterval);
+      };
+    }
+    return undefined;
+  }, [handleStorageChange, areUsersEqual]);
 
   return { user, isLoading };
 }

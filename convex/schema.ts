@@ -4,9 +4,9 @@ import { v } from 'convex/values';
 export default defineSchema({
   users: defineTable({
     email: v.string(),
-    password: v.string(), // In a real app, this would be hashed
+    password: v.string(),
     createdAt: v.string(),
-  }),
+  }).index('by_email', ['email']), // Add this index for email lookups
   sessions: defineTable({
     userId: v.id('users'),
     active: v.boolean(),
