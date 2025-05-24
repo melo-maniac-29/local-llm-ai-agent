@@ -5,9 +5,9 @@ This project creates an **Intelligent AI Planning Assistant** that converts natu
 
 - **Next.js**: A React framework for building the full-stack application interface
 - **Convex**: A real-time backend database with built-in sync capabilities
-- **Ollama**: A local large language model runner for AI processing without cloud dependencies
+- **LM Studio**: A local large language model runner for AI processing without cloud dependencies
 
-The planning assistant will enable users to input their goals in natural language and receive an organized weekly schedule. By keeping the AI processing local with Ollama, we maintain privacy and reduce operational costs.
+The planning assistant will enable users to input their goals in natural language and receive an organized weekly schedule. By keeping the AI processing local with LM Studio, we maintain privacy and reduce operational costs.
 
 ---
 
@@ -16,7 +16,7 @@ The planning assistant will enable users to input their goals in natural languag
 ### Core Components Interaction
 1. **User Interface (Next.js)**: Collects user goals and displays generated plans
 2. **Backend Processing (Convex)**: Stores tasks and manages data persistence
-3. **AI Processing (Ollama)**: Transforms natural language goals into structured tasks
+3. **AI Processing (LM Studio)**: Transforms natural language goals into structured tasks
 4. **Integration Layer**: Connects the planning system with external calendars and tools
 
 This architecture allows for separation of concerns while maintaining real-time data flow between components.
@@ -29,17 +29,15 @@ This architecture allows for separation of concerns while maintaining real-time 
 Before coding begins, we need to set up a proper development environment with all necessary tools. This includes:
 
 - **Node.js & npm**: The foundation for running JavaScript applications
-- **Ollama**: Local LLM runner that will power our AI capabilities
+- **LM Studio**: Local LLM runner that will power our AI capabilities
 - **Git**: For version control and collaboration
 
 ```bash
-# Install Node.js 18+, Git, and Ollama
-# macOS: curl -fsSL https://ollama.ai/install.sh | sh
-# Windows: Download from ollama.ai
+# Install Node.js 18+, Git
+# Download and install LM Studio from https://lmstudio.ai/
 
-# Pull and test LLM model - Mistral is a good balance of performance and efficiency
-ollama pull mistral
-ollama run mistral  # Test that the model works locally
+# Select and download a suitable model in LM Studio
+# Models like Mistral or Llama2 provide a good balance of performance and efficiency
 ```
 
 ### Project Foundation
@@ -62,7 +60,7 @@ npm install googleapis google-auth-library
 ### Understanding the Dependencies
 - **convex**: Real-time database with automatic sync capabilities
 - **langchain**: Framework for building LLM applications
-- **@langchain/ollama**: Connector for using Ollama models with LangChain
+- **@langchain/core**: Core LangChain functionality for working with LLMs
 - **googleapis**: For future calendar integration features
 
 ---
@@ -115,7 +113,7 @@ These functions will form the API that our frontend interacts with.
 ## 📋 STEP 3: AI Integration Strategy
 
 ### Local LLM Integration
-Ollama provides local AI processing without sending data to external services. This approach offers:
+LM Studio provides local AI processing without sending data to external services. This approach offers:
 
 - **Privacy**: User goals and plans remain on their device
 - **No API costs**: Eliminating the need for OpenAI or other API subscriptions
@@ -216,8 +214,8 @@ Implement tests at multiple levels:
 ### Local Development Environment
 ```bash
 # Running the complete stack locally
-# Terminal 1: Start Ollama
-ollama serve
+# Terminal 1: Start LM Studio and expose API endpoint (typically at http://localhost:1234)
+# Launch LM Studio application and start the local server
 
 # Terminal 2: Start Convex
 npx convex dev
@@ -229,7 +227,7 @@ npm run dev
 ### Production Deployment Options
 - **Vercel**: For hosting Next.js frontend
 - **Convex Cloud**: For database and backend functions
-- **User's local machine**: For running Ollama (no cloud deployment needed)
+- **User's local machine**: For running LM Studio (no cloud deployment needed)
 
 ---
 
@@ -267,7 +265,7 @@ The system is designed for easy extension through:
 For team members implementing this system:
 - [Next.js Documentation](https://nextjs.org/docs)
 - [Convex Documentation](https://docs.convex.dev)
-- [Ollama GitHub](https://github.com/ollama/ollama)
+- [LM Studio](https://lmstudio.ai/)
 - [LangChain JS Documentation](https://js.langchain.com/docs/)
 
 ---
@@ -277,7 +275,7 @@ For team members implementing this system:
 1. Create project structure and repository
 2. Implement database schema in Convex
 3. Set up basic Next.js pages and components
-4. Create AI integration layer with Ollama
+4. Create AI integration layer with LM Studio
 5. Implement minimal viable planning functionality
 
 This approach allows us to build incrementally, adding tools one by one as the core system stabilizes.
