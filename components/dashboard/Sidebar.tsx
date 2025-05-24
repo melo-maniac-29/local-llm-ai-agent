@@ -13,14 +13,6 @@ export default function Sidebar() {
     {
       name: 'Chat with Agent',
       href: '/dashboard/chat',
-    },
-    {
-      name: 'Settings',
-      href: '/dashboard/settings',
-    },
-    {
-      name: 'LLM Troubleshooter',
-      href: '/dashboard/troubleshoot',
     }
   ];
 

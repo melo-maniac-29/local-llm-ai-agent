@@ -6,18 +6,30 @@ export default defineSchema({
     email: v.string(),
     password: v.string(),
     createdAt: v.string(),
-  }).index('by_email', ['email']), // Add this index for email lookups
+  }).index('by_email', ['email']),
+
   sessions: defineTable({
     userId: v.id('users'),
     active: v.boolean(),
     createdAt: v.string(),
   }),
+
+  // Keep the individual messages table for backward compatibility
   messages: defineTable({
     userId: v.string(),
-    role: v.string(), // 'user' or 'assistant'
+    role: v.string(),
     content: v.string(),
     timestamp: v.string(),
-    sentiment: v.optional(v.string()), // 'positive', 'neutral', or 'negative'
-    actions: v.optional(v.string()), // JSON string of suggested actions
+    sentiment: v.optional(v.string()),
+    actions: v.optional(v.string()),
+  }).index('by_userId', ['userId']),
+
+  // Add a new table for storing complete conversations
+  conversations: defineTable({
+    userId: v.string(),
+    title: v.string(),
+    messages: v.string(), // JSON string containing all messages in the conversation
+    lastUpdated: v.string(),
+    createdAt: v.string(),
   }).index('by_userId', ['userId']),
 });

@@ -43,3 +43,61 @@ export const getMessages = query({
     return messages;
   },
 });
+
+// Add new methods for conversation management
+export const saveConversation = mutation({
+  args: {
+    userId: v.string(),
+    title: v.string(),
+    messages: v.string(), // JSON string of all messages
+    conversationId: v.optional(v.string()), // For updating existing conversations
+  },
+  handler: async (ctx, args) => {
+    const { userId, title, messages, conversationId } = args;
+    const timestamp = new Date().toISOString();
+    
+    if (conversationId) {
+      // Update existing conversation
+      await ctx.db.patch(conversationId, {
+        messages,
+        lastUpdated: timestamp,
+      });
+      return { conversationId };
+    } else {
+      // Create new conversation
+      const newId = await ctx.db.insert('conversations', {
+        userId,
+        title,
+        messages,
+        lastUpdated: timestamp,
+        createdAt: timestamp,
+      });
+      return { conversationId: newId };
+    }
+  },
+});
+
+export const getConversations = query({
+  args: {
+    userId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const conversations = await ctx.db
+      .query('conversations')
+      .withIndex('by_userId', q => q.eq('userId', args.userId))
+      .order('desc', q => q.field('lastUpdated'))
+      .collect();
+    
+    return conversations;
+  },
+});
+
+export const getConversation = query({
+  args: {
+    conversationId: v.id('conversations'),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db.get(args.conversationId);
+    return conversation;
+  },
+});

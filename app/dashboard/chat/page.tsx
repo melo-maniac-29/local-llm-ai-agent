@@ -32,8 +32,11 @@ export default function ChatWithAgent() {
   ]);
   const [isProcessing, setIsProcessing] = useState(false);
   
-  // Use useMutation for saving messages to the database
-  const saveMessage = useMutation(api.messages.saveMessage);
+  // Use mutation for saving complete conversations
+  const saveConversation = useMutation(api.messages.saveConversation);
+  
+  // Optional: Track the current conversation ID
+  const [conversationId, setConversationId] = useState<string | null>(null);
   
   // Query for existing messages
   const savedMessages = useQuery(api.messages.getMessages, 
@@ -87,7 +90,13 @@ export default function ChatWithAgent() {
     console.log("Calling backend API route");
     
     try {
-      // Call our own API route which will then call LM Studio
+      // Format conversation history correctly - include only recent messages
+      // and ensure they only have user or assistant roles
+      const validHistory = conversationHistory
+        .filter(msg => msg.role === 'user' || msg.role === 'assistant')
+        .slice(-6); // Keep conversation context manageable
+    
+      // Call the local API route
       const response = await fetch('/api/llm', {
         method: 'POST',
         headers: {
@@ -95,10 +104,7 @@ export default function ChatWithAgent() {
         },
         body: JSON.stringify({
           message: userMessage,
-          conversationHistory: conversationHistory.filter(msg => 
-            // Only include user and assistant messages
-            msg.role === 'user' || msg.role === 'assistant'
-          )
+          conversationHistory: validHistory
         }),
       });
       
@@ -119,6 +125,43 @@ export default function ChatWithAgent() {
     }
   };
 
+  // Save the entire conversation
+  const saveEntireConversation = async () => {
+    if (!user || messages.length <= 1) return; // Don't save empty conversations
+    
+    try {
+      // Filter out typing indicators
+      const messagesToSave = messages
+        .filter(msg => msg.id !== 'typing-indicator')
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp.toISOString(),
+          // Include optional fields if they exist
+          ...(msg.sentiment ? { sentiment: msg.sentiment } : {}),
+          ...(msg.actions ? { actions: msg.actions } : {}),
+        }));
+      
+      // Generate a title from the first few messages
+      const title = messages[1]?.content.slice(0, 30) + "..." || "New conversation";
+      
+      // Save conversation
+      const result = await saveConversation({
+        userId: user.id,
+        title,
+        messages: JSON.stringify(messagesToSave),
+        ...(conversationId ? { conversationId } : {}),
+      });
+      
+      // Update conversationId if this is a new conversation
+      if (result.conversationId && !conversationId) {
+        setConversationId(result.conversationId);
+      }
+    } catch (error) {
+      console.error("Error saving conversation:", error);
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || isProcessing) return;
     
@@ -136,12 +179,12 @@ export default function ChatWithAgent() {
     
     try {
       // Save user message to database
-      await saveMessage({ 
-        userId: user.id,
-        role: 'user',
-        content: userMessage.content,
-        timestamp: userMessage.timestamp.toISOString()
-      });
+      // await saveMessage({ 
+      //   userId: user.id,
+      //   role: 'user',
+      //   content: userMessage.content,
+      //   timestamp: userMessage.timestamp.toISOString()
+      // });
       
       // Show typing indicator
       setMessages(prev => [...prev, {
@@ -188,12 +231,15 @@ export default function ChatWithAgent() {
       setMessages(prev => [...prev, assistantMessage]);
       
       // Save assistant response to database
-      await saveMessage({
-        userId: user.id,
-        role: 'assistant',
-        content: assistantMessage.content,
-        timestamp: assistantMessage.timestamp.toISOString()
-      });
+      // await saveMessage({
+      //   userId: user.id,
+      //   role: 'assistant',
+      //   content: assistantMessage.content,
+      //   timestamp: assistantMessage.timestamp.toISOString()
+      // });
+      
+      // Save the entire conversation after adding new messages
+      saveEntireConversation();
     } catch (error) {
       console.error('Error sending message:', error);
       
@@ -211,12 +257,12 @@ export default function ChatWithAgent() {
       setMessages(prev => [...prev, errorMessage]);
       
       // Save error response to database
-      await saveMessage({
-        userId: user.id,
-        role: 'assistant',
-        content: errorMessage.content,
-        timestamp: errorMessage.timestamp.toISOString()
-      });
+      // await saveMessage({
+      //   userId: user.id,
+      //   role: 'assistant',
+      //   content: errorMessage.content,
+      //   timestamp: errorMessage.timestamp.toISOString()
+      // });
     } finally {
       setIsProcessing(false);
     }

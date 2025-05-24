@@ -31,43 +31,24 @@ export async function POST(req: NextRequest) {
         const LLM_API_URL = `${baseUrl}/v1/chat/completions`;
         console.log(`[API] Trying LLM at: ${LLM_API_URL}`);
         
-        // IMPORTANT: LM Studio only supports 'user' and 'assistant' roles
-        // Instead of using a system message, add system instructions as a user message
-        const messages = [];
+        // Handle conversation history correctly
+        let messages = [];
         
-        // Add conversation history if provided
-        if (conversationHistory && Array.isArray(conversationHistory)) {
-          // Filter out any messages that aren't user or assistant
-          const validMessages = conversationHistory.filter(
+        // Initialize with a first message if this is a new conversation
+        if (!conversationHistory || conversationHistory.length === 0) {
+          // Just add the current user message
+          messages.push({ 
+            role: "user", 
+            content: message 
+          });
+        } else {
+          // Filter only user and assistant messages (LM Studio requirement)
+          messages = conversationHistory.filter(
             msg => msg.role === 'user' || msg.role === 'assistant'
           );
-          
-          // If this is a new conversation, include instructions as a user message
-          if (validMessages.length === 1 && validMessages[0].role === 'user') {
-            // Add an initial "user" message with instructions
-            messages.push({
-              role: "user",
-              content: "You are Orbital AI, a helpful assistant that specializes in planning, scheduling, and organizing tasks. Be concise and clear in your responses."
-            });
-            
-            // Add an assistant acknowledgment
-            messages.push({
-              role: "assistant",
-              content: "I'm Orbital AI. I'll help you with planning, scheduling, and organizing tasks. How can I assist you today?"
-            });
-          }
-          
-          // Add the valid conversation history
-          messages.push(...validMessages);
-        } else {
-          // Add a user message with instructions followed by the actual user query
-          messages.push({
-            role: "user",
-            content: "You are Orbital AI, a helpful assistant. Please respond to this: " + message
-          });
         }
         
-        console.log("Sending messages to LM Studio:", messages);
+        console.log("[API] Sending messages:", messages);
         
         // Connect to LM Studio
         llmResponse = await fetch(LLM_API_URL, {
