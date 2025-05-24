@@ -7,9 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
-import Sidebar from '@/components/dashboard/Sidebar';
-import DebugButton from './debug-button';
 import ChatSidebar from '@/components/dashboard/ChatSidebar';
+import DebugButton from './debug-button';
 
 type Message = {
   id: string;

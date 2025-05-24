@@ -12,6 +12,7 @@ export default function Dashboard() {
   const { signOut } = useSignOut();
   const router = useRouter();
 
+  
   useEffect(() => {
     if (!isLoading && !user) {
       router.push('/auth');
