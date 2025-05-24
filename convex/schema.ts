@@ -22,4 +22,14 @@ export default defineSchema({
     lastUpdated: v.string(),
     createdAt: v.string(),
   }).index('by_userId', ['userId']),
+  
+  // Table for storing Google Calendar tokens
+  calendarTokens: defineTable({
+    userId: v.string(),
+    accessToken: v.string(),
+    refreshToken: v.optional(v.string()),
+    expiryDate: v.number(),
+    createdAt: v.string(),
+    updatedAt: v.string(),
+  }).index('by_userId', ['userId']),
 });

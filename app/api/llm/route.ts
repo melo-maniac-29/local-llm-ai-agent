@@ -1,11 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { setupAgent, processWithAgent } from '@/lib/langchain/agent';
+import { detectSchedulingIntent } from '@/lib/langchain/calendar';
 
 // Allow cross-origin requests to this API
 export async function OPTIONS() {
-  return NextResponse.json({}, {
+  return new NextResponse(null, {
     headers: {
       'Access-Control-Allow-Origin': '*',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+      'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
       'Access-Control-Allow-Headers': 'Content-Type, Authorization',
     },
   });
@@ -15,11 +17,33 @@ export async function POST(req: NextRequest) {
   try {
     const { message, conversationHistory } = await req.json();
     
+    // First check if we should use the LangChain agent based on the message content
+    const hasSchedulingIntent = await detectSchedulingIntent(message);
+    
+    // Decide whether to use LangChain agent or regular LLM processing
+    if (hasSchedulingIntent) {
+      try {
+        // Initialize LangChain agent
+        const agent = await setupAgent("not-needed"); // LM Studio doesn't need an API key
+        
+        // Process with LangChain agent
+        const result = await processWithAgent(agent, message, conversationHistory || []);
+        
+        return NextResponse.json({ 
+          text: result.text,
+          isSchedulingRequest: true,
+        });
+      } catch (agentError) {
+        console.error('[API] Error in LangChain agent processing:', agentError);
+        console.log('[API] Falling back to regular LLM processing');
+      }
+    }
+    
+    // Regular LLM processing path (fallback or non-scheduling intent)
     // Try different LM Studio endpoints
     const endpoints = [
-      "http://localhost:1234",
-      "http://127.0.0.1:1234",
-      "http://192.168.117.23:1234"
+      process.env.LLM_API_URL || "http://localhost:1234",
+      "http://127.0.0.1:1234"
     ];
     
     let llmResponse = null;
@@ -36,19 +60,17 @@ export async function POST(req: NextRequest) {
         
         // Initialize with a first message if this is a new conversation
         if (!conversationHistory || conversationHistory.length === 0) {
-          // Just add the current user message
-          messages.push({ 
-            role: "user", 
-            content: message 
-          });
+          messages.push({ role: "user", content: message });
         } else {
           // Filter only user and assistant messages (LM Studio requirement)
           messages = conversationHistory.filter(
-            msg => msg.role === 'user' || msg.role === 'assistant'
+            (msg: {role: string; content: string}) => msg.role === 'user' || msg.role === 'assistant'
           );
+          // Add the current message
+          messages.push({ role: "user", content: message });
         }
         
-        // Connect to LM Studio with streaming enabled
+        // Connect to LM Studio with streaming disabled
         llmResponse = await fetch(LLM_API_URL, {
           method: 'POST',
           headers: {
@@ -56,10 +78,10 @@ export async function POST(req: NextRequest) {
           },
           body: JSON.stringify({
             messages: messages,
-            model: "mistral-7b-instruct-v0.3:2",
+            model: "mistral-7b-instruct-v0.3",
             temperature: 0.7,
             max_tokens: 500,
-            stream: false, // We'll handle streaming separately
+            stream: false,
           }),
           signal: AbortSignal.timeout(20000) // Increased timeout for slower models
         });
@@ -88,7 +110,10 @@ export async function POST(req: NextRequest) {
     const data = await llmResponse.json();
     const assistantMessage = data.choices[0].message.content;
 
-    return NextResponse.json({ text: assistantMessage });
+    return NextResponse.json({ 
+      text: assistantMessage,
+      isSchedulingRequest: false
+    });
     
   } catch (error) {
     console.error('[API] Error in LLM route:', error);

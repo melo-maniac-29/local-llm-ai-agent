@@ -1,16 +1,54 @@
 import { NextRequest } from 'next/server';
+import { setupAgent, processWithAgent } from '@/lib/langchain/agent';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: NextRequest) {
   try {
     const { message, conversationHistory } = await req.json();
+      // First check if this is a scheduling request
+    const hasSchedulingIntent = message.toLowerCase().includes('schedule') ||
+                               message.toLowerCase().includes('neet') ||
+                               message.toLowerCase().includes('exam') ||
+                               message.toLowerCase().includes('study');
+    if (hasSchedulingIntent) {
+      try {
+        // Initialize simple LLM
+        const llm = await setupAgent();
+        
+        // Process with simplified agent (non-streaming)
+        const result = await processWithAgent(llm, message, conversationHistory || []);
+        
+        // If we got a valid result, return it
+        if (result && result.text) {
+          return new Response(
+            `data: ${JSON.stringify({ 
+              content: result.text,
+              isSchedulingRequest: true 
+            })}\n\ndata: [DONE]\n\n`,
+            {
+              headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache',
+                'Connection': 'keep-alive',
+              },
+            }
+          );
+        }
+        
+        // If no valid result, throw error to trigger fallback
+        throw new Error("Invalid agent response");
+      } catch (agentError) {
+        console.error('[Stream] Error in agent processing:', agentError);
+        // Fall back to regular streaming if agent fails
+        console.log('[Stream] Falling back to regular LLM processing');
+      }
+    }
     
     // Try different LM Studio endpoints
     const endpoints = [
-      "http://localhost:1234",
-      "http://127.0.0.1:1234",
-      "http://192.168.117.23:1234"
+      process.env.LLM_API_URL || "http://localhost:1234",
+      "http://127.0.0.1:1234"
     ];
     
     let llmResponse = null;
@@ -20,22 +58,21 @@ export async function POST(req: NextRequest) {
     for (const baseUrl of endpoints) {
       try {
         const LLM_API_URL = `${baseUrl}/v1/chat/completions`;
+        console.log(`[Stream] Trying LLM at: ${LLM_API_URL}`);
         
         // Handle conversation history correctly
         let messages = [];
         
         // Initialize with a first message if this is a new conversation
         if (!conversationHistory || conversationHistory.length === 0) {
-          // Just add the current user message
-          messages.push({ 
-            role: "user", 
-            content: message 
-          });
+          messages.push({ role: "user", content: message });
         } else {
           // Filter only user and assistant messages (LM Studio requirement)
           messages = conversationHistory.filter(
-            msg => msg.role === 'user' || msg.role === 'assistant'
+            (msg: {role: string; content: string}) => msg.role === 'user' || msg.role === 'assistant'
           );
+          // Add the current message
+          messages.push({ role: "user", content: message });
         }
         
         // Connect to LM Studio with streaming enabled
@@ -46,15 +83,16 @@ export async function POST(req: NextRequest) {
           },
           body: JSON.stringify({
             messages: messages,
-            model: "mistral-7b-instruct-v0.3:2",
+            model: "mistral-7b-instruct-v0.3",
             temperature: 0.7,
             max_tokens: 500,
-            stream: true, // Enable streaming
+            stream: true,
           }),
           signal: AbortSignal.timeout(30000)
         });
         
         if (llmResponse.ok) {
+          console.log(`[Stream] Successfully connected to ${LLM_API_URL}`);
           break;
         } else {
           const errorText = await llmResponse.text();
@@ -67,10 +105,17 @@ export async function POST(req: NextRequest) {
     }
 
     if (!llmResponse || !llmResponse.ok) {
-      console.error('[API] Failed to connect to any LLM endpoint:', errorMessages);
+      console.error('[Stream] Failed to connect to any LLM endpoint:', errorMessages);
       return new Response(
-        JSON.stringify({ error: `Failed to connect to LLM: ${errorMessages.join('; ')}` }), 
-        { status: 500 }
+        `data: ${JSON.stringify({ error: `Failed to connect to LLM: ${errorMessages.join('; ')}` })}\n\ndata: [DONE]\n\n`,
+        { 
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          },
+          status: 500 
+        }
       );
     }
 
@@ -82,20 +127,17 @@ export async function POST(req: NextRequest) {
       start(controller) {
         console.log('[Stream] Starting stream processing');
       },
+      
       async transform(chunk, controller) {
         const text = decoder.decode(chunk);
-        
-        // Skip empty lines
         if (!text.trim()) return;
         
-        // Process SSE data
         const lines = text.split("\n");
         
         for (const line of lines) {
           if (line.startsWith("data: ")) {
             const data = line.substring(6);
             
-            // Look for the "[DONE]" message
             if (data === "[DONE]") {
               console.log('[Stream] Received [DONE] signal');
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
@@ -103,7 +145,6 @@ export async function POST(req: NextRequest) {
             }
             
             try {
-              // Parse the JSON data
               const parsedData = JSON.parse(data);
               
               // Extract the token if it exists
@@ -114,18 +155,21 @@ export async function POST(req: NextRequest) {
                 }
               }
             } catch (e) {
-              console.error("Error parsing SSE data:", e);
+              console.error("[Stream] Error parsing SSE data:", e);
+              // Don't send parse errors to the client, just log them
+              continue;
             }
           }
         }
       },
+      
       flush(controller) {
         console.log('[Stream] Flushing and sending final [DONE] signal');
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       }
     });
 
-    // Pass the LLM response through the transform stream
+    // Return the transformed stream response with proper SSE headers
     return new Response(llmResponse.body?.pipeThrough(transformStream), {
       headers: {
         'Content-Type': 'text/event-stream',
@@ -134,10 +178,17 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error) {
-    console.error('[API] Error in streaming LLM route:', error);
+    console.error('[Stream] Error in streaming LLM route:', error);
     return new Response(
-      JSON.stringify({ error: `Error processing request: ${error instanceof Error ? error.message : String(error)}` }),
-      { status: 500 }
+      `data: ${JSON.stringify({ error: `Error processing request: ${error instanceof Error ? error.message : String(error)}` })}\n\ndata: [DONE]\n\n`,
+      {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+        status: 500
+      }
     );
   }
 }

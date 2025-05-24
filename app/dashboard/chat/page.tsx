@@ -9,6 +9,9 @@ import { useMutation, useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import ChatSidebar from '@/components/dashboard/ChatSidebar';
 import DebugButton from './debug-button';
+import { useGoogleCalendar } from '@/hooks/calendar';
+import { formatStudyScheduleForCalendar } from '@/lib/langchain/calendar-client';
+import { SchedulePreview } from '@/components/calendar/SchedulePreview';
 
 type Message = {
   id: string;
@@ -16,6 +19,7 @@ type Message = {
   content: string;
   sentiment?: string;
   actions?: string[];
+  schedule?: any; // For storing schedule data
   timestamp: Date;
 };
 
@@ -136,8 +140,111 @@ export default function ChatWithAgent() {
     }, 100);
     
     return () => clearTimeout(scrollTimeout);
-  }, [messages]);
-
+  }, [messages]);  // State for scheduling-related UI
+  const [showCalendarButtons, setShowCalendarButtons] = useState(false);
+  const [scheduleData, setScheduleData] = useState<any>(null);
+  
+  // Use our calendar hook
+  const { 
+    isConnected: isCalendarConnected, 
+    authUrl: googleAuthUrl, 
+    getAuthUrl,
+    addToCalendar,
+    isLoading: isCalendarLoading 
+  } = useGoogleCalendar();
+  
+  // Check for calendar connection params in URL
+  useEffect(() => {
+    const searchParams = new URLSearchParams(window.location.search);
+    const calendarConnected = searchParams.get('calendar_connected');
+    const calendarError = searchParams.get('calendar_error');
+    const reason = searchParams.get('reason');
+    
+    if (calendarConnected === 'true') {
+      // If we have schedule data, try to add it to the calendar
+      if (scheduleData) {
+        handleAddToCalendar();
+      } else {
+        setMessages(prev => [...prev, {
+          id: `system-${Date.now()}`,
+          role: 'assistant',
+          content: '✅ Google Calendar connected successfully! Now I can add events to your calendar.',
+          timestamp: new Date(),
+        }]);
+      }
+      // Remove params from URL
+      window.history.replaceState({}, '', '/dashboard/chat');
+    } else if (calendarError === 'true') {
+      let errorMessage = '❌ There was an error connecting to Google Calendar. Please try again.';
+      
+      if (reason) {
+        switch (reason) {
+          case 'no_code':
+            errorMessage = '❌ No authorization code was provided by Google. Please try again.';
+            break;
+          case 'no_user':
+            errorMessage = '❌ User ID was not provided. Please try again.';
+            break;
+          case 'no_credentials':
+            errorMessage = '❌ Google API credentials are not configured. Please contact support.';
+            break;
+          case 'no_convex':
+            errorMessage = '❌ Database URL is not configured. Please contact support.';
+            break;
+        }
+      }
+      
+      setMessages(prev => [...prev, {
+        id: `system-${Date.now()}`,
+        role: 'assistant',
+        content: errorMessage,
+        timestamp: new Date(),
+      }]);
+      // Remove params from URL
+      window.history.replaceState({}, '', '/dashboard/chat');
+    }
+  }, [scheduleData]);
+  
+  // Handle adding schedule to calendar
+  const handleAddToCalendar = useCallback(async () => {
+    if (!scheduleData || !user) return;
+    
+    try {
+      // Format the schedule data for Google Calendar
+      const events = formatStudyScheduleForCalendar(scheduleData);
+      
+      // If already connected, add events directly
+      if (isCalendarConnected) {
+        const result = await addToCalendar(events);
+        
+        if (result.success) {
+          setMessages(prev => [...prev, {
+            id: `system-${Date.now()}`,
+            role: 'assistant',
+            content: '✅ Study schedule has been added to your Google Calendar!',
+            timestamp: new Date(),
+          }]);
+        } else {
+          throw new Error(result.error);
+        }
+      } else {
+        // Need to connect first - get the auth URL
+        await getAuthUrl();
+      }
+    } catch (error) {
+      console.error('Failed to add events to calendar:', error);
+      setMessages(prev => [...prev, {
+        id: `system-${Date.now()}`,
+        role: 'assistant',
+        content: `❌ Error adding schedule to calendar: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        timestamp: new Date(),
+      }]);
+    } finally {
+      setShowCalendarButtons(false);
+      setScheduleData(null);
+    }
+  }, [scheduleData, user, isCalendarConnected, addToCalendar, getAuthUrl]);
+  
   // Auth redirect
   useEffect(() => {
     if (!isLoading && !user) {
@@ -203,10 +310,63 @@ export default function ChatWithAgent() {
           
           const data = trimmedLine.substring(6);
           if (data === "[DONE]") continue;
-          
-          try {
+            try {
             const parsed = JSON.parse(data);
             
+            // Check if this is a scheduling request that needs to be handled differently
+            if (parsed.useNonStreaming) {
+              // For scheduling requests, we need to call the non-streaming endpoint
+              const nonStreamingResponse = await fetch('/api/llm', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  message: userMessage,
+                  conversationHistory: validHistory
+                }),
+              });
+              
+              if (!nonStreamingResponse.ok) {
+                throw new Error(`API error: ${nonStreamingResponse.status}`);
+              }
+              
+              const responseData = await nonStreamingResponse.json();
+              accumulatedContent = responseData.text;
+              
+              // Check if this is a scheduling request
+              if (responseData.isSchedulingRequest) {
+                // Try to extract schedule data
+                try {
+                  // Look for JSON-like content in the response
+                  const jsonMatch = accumulatedContent.match(/```json\s*({[\s\S]*?})\s*```/);
+                  if (jsonMatch && jsonMatch[1]) {
+                    const extractedJson = jsonMatch[1];
+                    const scheduleInfo = JSON.parse(extractedJson);
+                    
+                    // Store the extracted schedule data
+                    setScheduleData(scheduleInfo);
+                    
+                    // Show calendar options
+                    setShowCalendarButtons(true);
+                      // Make sure we have the Google auth URL
+                    await getAuthUrl();
+                  }
+                } catch (jsonError) {
+                  console.error("Error extracting schedule data:", jsonError);
+                }
+              }
+              
+              setMessages(prev => prev.map(msg => 
+                msg.id === tempMsgId 
+                  ? { ...msg, content: accumulatedContent } 
+                  : msg
+              ));
+              
+              // Break out of the streaming loop since we're handling this differently
+              reader.cancel();
+              break;
+            }
+            
+            // Regular streaming content
             if (parsed.content) {
               accumulatedContent += parsed.content;
               
@@ -422,7 +582,79 @@ export default function ChatWithAgent() {
                   </div>
                 </div>
               </div>
-            ))}
+            ))}            {/* Calendar consent UI with schedule preview */}
+            {showCalendarButtons && scheduleData && (
+              <div className="flex flex-col p-4 mb-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="mb-4">
+                  <h3 className="text-lg font-medium text-blue-900 mb-2">Study Schedule Preview</h3>
+                  
+                  {/* Schedule Preview Component */}
+                  <div className="bg-white rounded-md p-3 border border-blue-100 mb-4">
+                    <SchedulePreview 
+                      scheduleData={scheduleData} 
+                      events={formatStudyScheduleForCalendar(scheduleData)} 
+                    />
+                  </div>
+                  
+                  <p className="text-sm mb-3">Would you like to add this study schedule to your calendar?</p>
+                </div>
+                
+                <div className="flex space-x-2">
+                  <Button 
+                    onClick={async () => {
+                      if (isCalendarConnected) {
+                        // Already connected, directly add events
+                        await handleAddToCalendar();
+                      } else {
+                        // Need to connect first
+                        if (googleAuthUrl) {
+                          window.location.href = googleAuthUrl;
+                        } else {
+                          // Try to get the auth URL
+                          await getAuthUrl();
+                          if (googleAuthUrl) {
+                            window.location.href = googleAuthUrl;
+                          } else {
+                            setMessages(prev => [...prev, {
+                              id: `system-${Date.now()}`,
+                              role: 'assistant',
+                              content: 'Sorry, I could not connect to Google Calendar. Please try again later.',
+                              timestamp: new Date(),
+                            }]);
+                            setShowCalendarButtons(false);
+                            setScheduleData(null);
+                          }
+                        }
+                      }
+                    }}
+                    className="bg-blue-600 hover:bg-blue-700"
+                    disabled={isCalendarLoading}
+                  >
+                    {isCalendarLoading 
+                      ? 'Processing...' 
+                      : isCalendarConnected 
+                        ? 'Add to Calendar' 
+                        : 'Connect Google Calendar'}
+                  </Button>
+                  <Button 
+                    variant="outline"
+                    onClick={() => {
+                      setMessages(prev => [...prev, {
+                        id: `system-${Date.now()}`,
+                        role: 'assistant',
+                        content: 'No problem. You can still copy this schedule and add it to your calendar manually if you wish.',
+                        timestamp: new Date(),
+                      }]);
+                      setShowCalendarButtons(false);
+                      setScheduleData(null);
+                    }}
+                    disabled={isCalendarLoading}
+                  >
+                    No thanks
+                  </Button>
+                </div>
+              </div>
+            )}
             <div ref={messagesEndRef} />
           </div>
           
