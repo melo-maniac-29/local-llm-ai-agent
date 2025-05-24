@@ -48,9 +48,7 @@ export async function POST(req: NextRequest) {
           );
         }
         
-        console.log("[API] Sending messages:", messages);
-        
-        // Connect to LM Studio
+        // Connect to LM Studio with streaming enabled
         llmResponse = await fetch(LLM_API_URL, {
           method: 'POST',
           headers: {
@@ -61,10 +59,9 @@ export async function POST(req: NextRequest) {
             model: "mistral-7b-instruct-v0.3:2",
             temperature: 0.7,
             max_tokens: 500,
-            stream: false,
+            stream: false, // We'll handle streaming separately
           }),
-          // Short timeout to avoid long waits
-          signal: AbortSignal.timeout(10000)
+          signal: AbortSignal.timeout(20000) // Increased timeout for slower models
         });
         
         if (llmResponse.ok) {
