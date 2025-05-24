@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect } from 'react';
-import { useQuery } from 'convex/react';
+import { useQuery, useMutation } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import { useUser } from '@/hooks/auth';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 
 interface ChatSidebarProps {
   currentConversationId: string | null;
@@ -22,12 +23,34 @@ export default function ChatSidebar({
   closeSidebar
 }: ChatSidebarProps) {
   const { user } = useUser();
+  const router = useRouter();
   
   // Query for user's conversations
   const conversations = useQuery(
     api.messages.getConversations, 
     user ? { userId: user.id } : "skip"
   );
+
+  // Mutation to delete a conversation
+  const deleteConversation = useMutation(api.messages.deleteConversation);
+
+  // Handle delete conversation
+  const handleDeleteConversation = async (e: React.MouseEvent, conversationId: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    
+    if (confirm("Are you sure you want to delete this conversation?")) {
+      await deleteConversation({ 
+        conversationId: conversationId, 
+        userId: user?.id as string 
+      });
+      
+      // If the deleted conversation is the current one, redirect to chat index
+      if (conversationId === currentConversationId) {
+        router.push('/dashboard/chat');
+      }
+    }
+  };
 
   return (
     <>
@@ -77,16 +100,27 @@ export default function ChatSidebar({
               <Link key={conv._id} href={`/dashboard/chat/${conv._id}`}>
                 <div 
                   className={cn(
-                    "p-3 rounded hover:bg-slate-800 cursor-pointer text-sm truncate",
+                    "p-3 rounded hover:bg-slate-800 cursor-pointer text-sm truncate group",
                     currentConversationId === conv._id ? "bg-slate-700" : ""
                   )}
                   onClick={closeSidebar}
                 >
-                  <div className="flex items-start">
-                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
-                    </svg>
-                    <span className="overflow-hidden text-ellipsis">{conv.title}</span>
+                  <div className="flex items-start justify-between">
+                    <div className="flex items-start flex-grow overflow-hidden">
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2 flex-shrink-0 mt-0.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+                      </svg>
+                      <span className="overflow-hidden text-ellipsis">{conv.title}</span>
+                    </div>
+                    <button 
+                      onClick={(e) => handleDeleteConversation(e, conv._id)}
+                      className="text-slate-400 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity ml-2"
+                      aria-label="Delete conversation"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+                      </svg>
+                    </button>
                   </div>
                   <div className="text-xs text-gray-400 mt-1 pl-7">
                     {new Date(conv.lastUpdated).toLocaleDateString()}
