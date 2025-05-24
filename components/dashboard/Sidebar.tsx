@@ -17,6 +17,10 @@ export default function Sidebar() {
     {
       name: 'Settings',
       href: '/dashboard/settings',
+    },
+    {
+      name: 'LLM Troubleshooter',
+      href: '/dashboard/troubleshoot',
     }
   ];
 

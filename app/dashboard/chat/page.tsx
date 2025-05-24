@@ -5,7 +5,7 @@ import { useUser } from '@/hooks/auth';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { useMutation } from 'convex/react';
+import { useMutation, useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import Sidebar from '@/components/dashboard/Sidebar';
 
@@ -13,6 +13,8 @@ type Message = {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  sentiment?: string;
+  actions?: string[];
   timestamp: Date;
 };
 
@@ -30,13 +32,39 @@ export default function ChatWithAgent() {
   ]);
   const [isProcessing, setIsProcessing] = useState(false);
   
-  const sendMessage = useMutation(api.chat.sendMessage);
+  // Use useMutation for saving messages to the database
+  const saveMessage = useMutation(api.messages.saveMessage);
+  
+  // Query for existing messages
+  const savedMessages = useQuery(api.messages.getMessages, 
+    user ? { userId: user.id } : "skip"
+  );
+  
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // Load saved messages on initial render
+  useEffect(() => {
+    if (savedMessages && savedMessages.length > 0) {
+      const formattedMessages = savedMessages.map(msg => ({
+        id: msg._id.toString(),
+        role: msg.role as 'user' | 'assistant',
+        content: msg.content,
+        timestamp: new Date(msg.timestamp),
+      }));
+      
+      // Only set if we have saved messages
+      if (formattedMessages.length > 0) {
+        setMessages(formattedMessages);
+      }
+    }
+  }, [savedMessages]);
+
+  // Scroll to bottom when messages update
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages]);
 
+  // Auth redirect
   useEffect(() => {
     if (!isLoading && !user) {
       router.push('/auth');
@@ -55,6 +83,42 @@ export default function ChatWithAgent() {
     return null;
   }
 
+  const callLLMDirectly = async (userMessage: string, conversationHistory: any[]) => {
+    console.log("Calling backend API route");
+    
+    try {
+      // Call our own API route which will then call LM Studio
+      const response = await fetch('/api/llm', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          message: userMessage,
+          conversationHistory: conversationHistory.filter(msg => 
+            // Only include user and assistant messages
+            msg.role === 'user' || msg.role === 'assistant'
+          )
+        }),
+      });
+      
+      if (!response.ok) {
+        const errorData = await response.text();
+        console.error("LLM API error:", errorData);
+        throw new Error(`API error: ${response.status} - ${errorData}`);
+      }
+      
+      const data = await response.json();
+      return {
+        text: data.text,
+        timestamp: new Date().toISOString()
+      };
+    } catch (error) {
+      console.error("Error in callLLMDirectly:", error);
+      throw error;
+    }
+  };
+
   const handleSendMessage = async () => {
     if (!inputMessage.trim() || isProcessing) return;
     
@@ -71,7 +135,15 @@ export default function ChatWithAgent() {
     setIsProcessing(true);
     
     try {
-      // Show a "typing" indicator
+      // Save user message to database
+      await saveMessage({ 
+        userId: user.id,
+        role: 'user',
+        content: userMessage.content,
+        timestamp: userMessage.timestamp.toISOString()
+      });
+      
+      // Show typing indicator
       setMessages(prev => [...prev, {
         id: 'typing-indicator',
         role: 'assistant',
@@ -79,10 +151,30 @@ export default function ChatWithAgent() {
         timestamp: new Date(),
       }]);
 
-      // Call the Convex function to process the message with local LLM
-      const response = await sendMessage({ message: userMessage.content });
+      // Create conversation history for context
+      const conversationHistory = messages
+        .filter(msg => msg.id !== 'typing-indicator') // Skip typing indicators
+        .slice(-5) // Only use last 5 messages for context window limits
+        .map(msg => ({
+          role: msg.role,
+          content: msg.content,
+        }))
+        // Ensure only 'user' and 'assistant' roles
+        .filter(msg => msg.role === 'user' || msg.role === 'assistant');
       
-      // Remove typing indicator and add the real response
+      // Add current user message
+      conversationHistory.push({
+        role: 'user',
+        content: userMessage.content,
+      });
+
+      // Call LLM directly instead of using Convex action
+      const response = await callLLMDirectly(
+        userMessage.content, 
+        conversationHistory
+      );
+      
+      // Remove typing indicator
       setMessages(prev => prev.filter(msg => msg.id !== 'typing-indicator'));
       
       // Add assistant message to the chat
@@ -94,6 +186,14 @@ export default function ChatWithAgent() {
       };
       
       setMessages(prev => [...prev, assistantMessage]);
+      
+      // Save assistant response to database
+      await saveMessage({
+        userId: user.id,
+        role: 'assistant',
+        content: assistantMessage.content,
+        timestamp: assistantMessage.timestamp.toISOString()
+      });
     } catch (error) {
       console.error('Error sending message:', error);
       
@@ -109,6 +209,14 @@ export default function ChatWithAgent() {
       };
       
       setMessages(prev => [...prev, errorMessage]);
+      
+      // Save error response to database
+      await saveMessage({
+        userId: user.id,
+        role: 'assistant',
+        content: errorMessage.content,
+        timestamp: errorMessage.timestamp.toISOString()
+      });
     } finally {
       setIsProcessing(false);
     }
@@ -134,6 +242,29 @@ export default function ChatWithAgent() {
                   msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-white border border-gray-200'
                 }`}>
                   <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+                  
+                  {/* Show sentiment if available */}
+                  {msg.sentiment && (
+                    <div className={`text-xs mt-1 italic ${
+                      msg.sentiment === 'positive' ? 'text-green-500' : 
+                      msg.sentiment === 'negative' ? 'text-red-500' : 'text-gray-500'
+                    }`}>
+                      Sentiment: {msg.sentiment}
+                    </div>
+                  )}
+                  
+                  {/* Show suggested actions if available */}
+                  {msg.actions && msg.actions.length > 0 && (
+                    <div className="mt-2">
+                      <p className="text-xs font-semibold text-gray-600">Suggested actions:</p>
+                      <ul className="list-disc list-inside text-xs text-gray-600">
+                        {msg.actions.map((action, index) => (
+                          <li key={index}>{action}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                  
                   <div className={`text-xs mt-1 ${
                     msg.role === 'user' ? 'text-blue-100' : 'text-gray-500'
                   }`}>

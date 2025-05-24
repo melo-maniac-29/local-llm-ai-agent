@@ -12,4 +12,12 @@ export default defineSchema({
     active: v.boolean(),
     createdAt: v.string(),
   }),
+  messages: defineTable({
+    userId: v.string(),
+    role: v.string(), // 'user' or 'assistant'
+    content: v.string(),
+    timestamp: v.string(),
+    sentiment: v.optional(v.string()), // 'positive', 'neutral', or 'negative'
+    actions: v.optional(v.string()), // JSON string of suggested actions
+  }).index('by_userId', ['userId']),
 });
