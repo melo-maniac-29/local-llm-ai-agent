@@ -1,50 +1,7 @@
 import { mutation, query } from './_generated/server';
 import { v } from 'convex/values';
 
-// Save a message to the database
-export const saveMessage = mutation({
-  args: {
-    userId: v.string(),
-    role: v.string(),
-    content: v.string(),
-    timestamp: v.string(),
-    sentiment: v.optional(v.string()),
-    actions: v.optional(v.string()),
-  },
-  handler: async (ctx, args) => {
-    const { userId, role, content, timestamp, sentiment, actions } = args;
-    
-    // Save the message with additional structured data
-    const messageId = await ctx.db.insert('messages', {
-      userId,
-      role,
-      content,
-      timestamp,
-      sentiment: sentiment || 'neutral',
-      actions: actions || '[]',
-    });
-    
-    return { messageId };
-  },
-});
-
-// Get messages for a specific user
-export const getMessages = query({
-  args: {
-    userId: v.string()
-  },
-  handler: async (ctx, args) => {
-    const messages = await ctx.db
-      .query('messages')
-      .withIndex('by_userId', (q) => q.eq('userId', args.userId))
-      .order('asc')
-      .take(50);
-    
-    return messages;
-  },
-});
-
-// Add new methods for conversation management
+// Conversation management functions
 export const saveConversation = mutation({
   args: {
     userId: v.string(),
@@ -56,23 +13,56 @@ export const saveConversation = mutation({
     const { userId, title, messages, conversationId } = args;
     const timestamp = new Date().toISOString();
     
+    // Parse and validate messages to catch potential issues
+    try {
+      const parsedMessages = JSON.parse(messages);
+      if (!Array.isArray(parsedMessages)) {
+        throw new Error('Messages must be an array');
+      }
+      
+      // Log the number of messages being saved
+      console.log(`Saving ${parsedMessages.length} messages for user ${userId}`);
+      
+      // Log roles to debug message order issues
+      console.log(`Message roles: ${parsedMessages.map(m => m.role).join(', ')}`);
+      
+      if (parsedMessages.length === 0) {
+        console.warn("Attempting to save an empty messages array");
+      }
+    } catch (error) {
+      console.error("Error parsing messages:", error);
+      throw new Error(`Invalid messages format: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    
     if (conversationId) {
       // Update existing conversation
-      await ctx.db.patch(conversationId, {
-        messages,
-        lastUpdated: timestamp,
-      });
-      return { conversationId };
+      try {
+        console.log(`Updating conversation ${conversationId}`);
+        await ctx.db.patch(conversationId, {
+          messages,
+          lastUpdated: timestamp,
+        });
+        return { conversationId };
+      } catch (error) {
+        console.error(`Error updating conversation ${conversationId}:`, error);
+        throw error;
+      }
     } else {
       // Create new conversation
-      const newId = await ctx.db.insert('conversations', {
-        userId,
-        title,
-        messages,
-        lastUpdated: timestamp,
-        createdAt: timestamp,
-      });
-      return { conversationId: newId };
+      try {
+        console.log(`Creating new conversation for user ${userId}`);
+        const newId = await ctx.db.insert('conversations', {
+          userId,
+          title,
+          messages,
+          lastUpdated: timestamp,
+          createdAt: timestamp,
+        });
+        return { conversationId: newId };
+      } catch (error) {
+        console.error(`Error creating conversation for user ${userId}:`, error);
+        throw error;
+      }
     }
   },
 });
@@ -92,6 +82,21 @@ export const getConversations = query({
   },
 });
 
+export const getLatestConversation = query({
+  args: {
+    userId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    const conversation = await ctx.db
+      .query('conversations')
+      .withIndex('by_userId', q => q.eq('userId', args.userId))
+      .order('desc', q => q.field('lastUpdated'))
+      .first();
+    
+    return conversation;
+  },
+});
+
 export const getConversation = query({
   args: {
     conversationId: v.id('conversations'),
@@ -99,5 +104,38 @@ export const getConversation = query({
   handler: async (ctx, args) => {
     const conversation = await ctx.db.get(args.conversationId);
     return conversation;
+  },
+});
+
+// For backward compatibility with any code still using getMessages
+export const getMessages = query({
+  args: {
+    userId: v.string()
+  },
+  handler: async (ctx, args) => {
+    console.log("WARNING: Using deprecated getMessages method - it now returns an empty array");
+    return [];
+  },
+});
+
+// Add a method to delete conversations
+export const deleteConversation = mutation({
+  args: {
+    conversationId: v.id('conversations'),
+    userId: v.string(),
+  },
+  handler: async (ctx, args) => {
+    // Security check - ensure user owns this conversation
+    const conversation = await ctx.db.get(args.conversationId);
+    if (!conversation) {
+      throw new Error("Conversation not found");
+    }
+    
+    if (conversation.userId !== args.userId) {
+      throw new Error("Not authorized to delete this conversation");
+    }
+    
+    await ctx.db.delete(args.conversationId);
+    return true;
   },
 });

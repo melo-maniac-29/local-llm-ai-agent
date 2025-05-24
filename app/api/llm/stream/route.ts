@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
     }
 
     if (!llmResponse || !llmResponse.ok) {
+      console.error('[API] Failed to connect to any LLM endpoint:', errorMessages);
       return new Response(
         JSON.stringify({ error: `Failed to connect to LLM: ${errorMessages.join('; ')}` }), 
         { status: 500 }
@@ -79,7 +80,7 @@ export async function POST(req: NextRequest) {
     
     const transformStream = new TransformStream({
       start(controller) {
-        // Initialize any state if needed
+        console.log('[Stream] Starting stream processing');
       },
       async transform(chunk, controller) {
         const text = decoder.decode(chunk);
@@ -96,6 +97,7 @@ export async function POST(req: NextRequest) {
             
             // Look for the "[DONE]" message
             if (data === "[DONE]") {
+              console.log('[Stream] Received [DONE] signal');
               controller.enqueue(encoder.encode("data: [DONE]\n\n"));
               continue;
             }
@@ -118,6 +120,7 @@ export async function POST(req: NextRequest) {
         }
       },
       flush(controller) {
+        console.log('[Stream] Flushing and sending final [DONE] signal');
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       }
     });

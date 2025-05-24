@@ -13,7 +13,12 @@ export default function Sidebar() {
     {
       name: 'Chat with Agent',
       href: '/dashboard/chat',
-    }
+    },
+    // Add the debug page, but only in development
+    ...(process.env.NODE_ENV === 'development' ? [{
+      name: 'Debug Chat',
+      href: '/dashboard/chat/debug',
+    }] : [])
   ];
 
   return (

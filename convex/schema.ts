@@ -14,17 +14,7 @@ export default defineSchema({
     createdAt: v.string(),
   }),
 
-  // Keep the individual messages table for backward compatibility
-  messages: defineTable({
-    userId: v.string(),
-    role: v.string(),
-    content: v.string(),
-    timestamp: v.string(),
-    sentiment: v.optional(v.string()),
-    actions: v.optional(v.string()),
-  }).index('by_userId', ['userId']),
-
-  // Add a new table for storing complete conversations
+  // Main table for storing conversations
   conversations: defineTable({
     userId: v.string(),
     title: v.string(),

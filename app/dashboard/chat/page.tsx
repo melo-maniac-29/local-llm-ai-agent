@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useUser } from '@/hooks/auth';
 import { useRouter } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -8,6 +8,8 @@ import { Input } from '@/components/ui/input';
 import { useMutation, useQuery } from 'convex/react';
 import { api } from '@/convex/_generated/api';
 import Sidebar from '@/components/dashboard/Sidebar';
+import DebugButton from './debug-button';
+import ChatSidebar from '@/components/dashboard/ChatSidebar';
 
 type Message = {
   id: string;
@@ -40,28 +42,92 @@ export default function ChatWithAgent() {
   // Optional: Track the current conversation ID
   const [conversationId, setConversationId] = useState<string | null>(null);
   
-  // Query for existing messages
-  const savedMessages = useQuery(api.messages.getMessages, 
+  // Query for existing conversation
+  const latestConversation = useQuery(api.messages.getLatestConversation, 
     user ? { userId: user.id } : "skip"
   );
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
-  // Load saved messages on initial render
-  useEffect(() => {
-    if (savedMessages && savedMessages.length > 0) {
-      const formattedMessages = savedMessages.map(msg => ({
-        id: msg._id.toString(),
-        role: msg.role as 'user' | 'assistant',
-        content: msg.content,
-        timestamp: new Date(msg.timestamp),
-      }));
+  // Save the entire conversation - defined with useCallback to avoid recreation
+  const saveEntireConversation = useCallback(async (messagesToSaveOverride?: Message[]) => {
+    if (!user) return;
+    
+    try {
+      // Use provided messages or current state
+      const msgsToSave = messagesToSaveOverride || messages;
       
-      if (formattedMessages.length > 0) {
-        setMessages(formattedMessages);
+      // Don't save if we only have the welcome message
+      if (msgsToSave.length <= 1) return;
+      
+      // Filter out typing indicators
+      const messagesToSave = msgsToSave
+        .filter(msg => msg.id !== 'typing-indicator')
+        .map(msg => ({
+          id: msg.id,
+          role: msg.role,
+          content: msg.content,
+          timestamp: msg.timestamp.toISOString(),
+          ...(msg.sentiment ? { sentiment: msg.sentiment } : {}),
+          ...(msg.actions ? { actions: msg.actions } : {})
+        }));
+      
+      // Generate a title from the first user message if possible
+      const userMessage = messagesToSave.find(m => m.role === 'user');
+      const title = userMessage 
+        ? userMessage.content.slice(0, 30) + "..." 
+        : "New conversation";
+      
+      console.log(`Saving conversation with ${messagesToSave.length} messages`);
+      
+      // Save conversation
+      const result = await saveConversation({
+        userId: user.id,
+        title,
+        messages: JSON.stringify(messagesToSave),
+        ...(conversationId ? { conversationId } : {})
+      });
+      
+      // Update conversationId if this is a new conversation
+      if (result?.conversationId && !conversationId) {
+        setConversationId(result.conversationId);
+      }
+    } catch (error) {
+      console.error("Error saving conversation:", error);
+    }
+  }, [user, messages, conversationId, saveConversation]);
+
+  // Load saved conversation on initial render
+  useEffect(() => {
+    if (latestConversation && user) {
+      try {
+        // Set the conversation ID
+        if (latestConversation._id) {
+          setConversationId(latestConversation._id);
+        }
+        
+        // Parse the messages from the JSON string
+        if (latestConversation && latestConversation.messages) {
+          const parsedMessages = JSON.parse(latestConversation.messages);
+          
+          if (Array.isArray(parsedMessages) && parsedMessages.length > 0) {
+            const formattedMessages = parsedMessages.map((msg, index) => ({
+              id: msg.id || `loaded-${index}`,
+              role: msg.role as 'user' | 'assistant',
+              content: msg.content,
+              sentiment: msg.sentiment,
+              actions: msg.actions,
+              timestamp: new Date(msg.timestamp),
+            }));
+            
+            setMessages(formattedMessages);
+          }
+        }
+      } catch (error) {
+        console.error("Error parsing conversation:", error);
       }
     }
-  }, [savedMessages]);
+  }, [latestConversation, user]);
 
   // Scroll to bottom when messages update
   useEffect(() => {
@@ -75,52 +141,12 @@ export default function ChatWithAgent() {
     }
   }, [user, isLoading, router]);
 
-  if (isLoading) {
-    return <div className="flex min-h-screen items-center justify-center"><p>Loading...</p></div>;
-  }
-
-  if (!user) {
-    return null;
-  }
-
-  // Save the entire conversation
-  const saveEntireConversation = async () => {
-    if (!user || messages.length <= 1) return;
-    
+  // Stream LLM call - defined with useCallback
+  const callLLMWithStreaming = useCallback(async (userMessage: string, history: any[], currentMsgs: Message[]) => {
     try {
-      // Filter out typing indicators
-      const messagesToSave = messages
-        .filter(msg => msg.id !== 'typing-indicator')
-        .map(msg => ({
-          role: msg.role,
-          content: msg.content,
-          timestamp: msg.timestamp.toISOString(),
-          ...(msg.sentiment ? { sentiment: msg.sentiment } : {}),
-          ...(msg.actions ? { actions: msg.actions } : {})
-        }));
+      // Create a snapshot of the current messages so we don't lose track of the user message
+      const messagesSnapshot = [...currentMsgs];
       
-      // Generate a title from the first few messages
-      const title = messages[1]?.content.slice(0, 30) + "..." || "New conversation";
-      
-      // Save conversation
-      const result = await saveConversation({
-        userId: user.id,
-        title,
-        messages: JSON.stringify(messagesToSave),
-        ...(conversationId ? { conversationId } : {})
-      });
-      
-      // Update conversationId if this is a new conversation
-      if (result && result.conversationId && !conversationId) {
-        setConversationId(result.conversationId);
-      }
-    } catch (error) {
-      console.error("Error saving conversation:", error);
-    }
-  };
-
-  const callLLMWithStreaming = async (userMessage: string, history: any[]) => {
-    try {
       const validHistory = history
         .filter(msg => msg.role === 'user' || msg.role === 'assistant')
         .slice(-6);
@@ -143,6 +169,7 @@ export default function ChatWithAgent() {
       
       const tempMsgId = `streaming-${Date.now()}`;
       
+      // Add streaming message to the messages that already include the user's message
       setMessages(prev => [
         ...prev.filter(msg => msg.id !== 'typing-indicator'),
         {
@@ -198,52 +225,60 @@ export default function ChatWithAgent() {
         timestamp: new Date(),
       };
       
-      setMessages(prev => prev.map(msg => 
-        msg.id === tempMsgId ? finalMessage : msg
-      ));
-      
-      // Save the conversation with the new message
-      const messagesToSave = [
-        ...messages.filter(m => m.id !== tempMsgId),
-        finalMessage
-      ].map(msg => ({
-        role: msg.role,
-        content: msg.content,
-        timestamp: msg.timestamp.toISOString()
-      }));
-      
-      await saveConversation({
-        userId: user.id,
-        title: messages[1]?.content.slice(0, 30) + "..." || "New conversation",
-        messages: JSON.stringify(messagesToSave),
-        ...(conversationId ? { conversationId } : {})
+      // Important: Use a callback with prev to ensure we're working with the latest state
+      setMessages(prev => {
+        const updatedMessages = prev.map(msg => 
+          msg.id === tempMsgId ? finalMessage : msg
+        );
+        return updatedMessages;
       });
       
-      setIsStreaming(false);
+      // Wait for state update to complete before saving
+      setTimeout(async () => {
+        // Get current messages after state update
+        const allCurrentMessages = messagesSnapshot.filter(m => 
+          m.id !== 'typing-indicator' && m.id !== tempMsgId
+        ).concat(finalMessage);
+        
+        // Save all messages including the user's original message and the final response
+        await saveEntireConversation(allCurrentMessages);
+        
+        setIsStreaming(false);
+      }, 100);
+      
       return finalMessage;
+      
     } catch (error) {
       console.error("Error in streaming:", error);
       setIsStreaming(false);
       throw error;
     }
-  };
+  }, [saveEntireConversation]);
 
-  const handleSendMessage = async () => {
+  const handleSendMessage = useCallback(async () => {
     if (!inputMessage.trim() || isProcessing) return;
     
+    console.log("Sending message:", inputMessage);
+    
     const userMessage = {
-      id: Date.now().toString(),
+      id: `user-${Date.now()}`,
       role: 'user' as const,
       content: inputMessage.trim(),
       timestamp: new Date(),
     };
     
+    // First update: Add user message to UI
     setMessages(prev => [...prev, userMessage]);
+    
+    // Clear input and set processing flag
     setInputMessage('');
     setIsProcessing(true);
     
     try {
-      // Show typing indicator
+      // Create a snapshot with the user message
+      const updatedWithUserMsg = [...messages, userMessage];
+      
+      // Add typing indicator
       setMessages(prev => [...prev, {
         id: 'typing-indicator',
         role: 'assistant',
@@ -251,51 +286,90 @@ export default function ChatWithAgent() {
         timestamp: new Date(),
       }]);
 
+      // Debug - what messages we're saving
+      console.log("User message being saved:", userMessage);
+      console.log("Current message state:", updatedWithUserMsg);
+
       // Create conversation history
-      const conversationHistory = messages
-        .filter(msg => msg.id !== 'typing-indicator')
-        .slice(-5)
+      const conversationHistory = updatedWithUserMsg
         .map(msg => ({
           role: msg.role,
           content: msg.content,
-        }))
-        .filter(msg => msg.role === 'user' || msg.role === 'assistant');
+        }));
       
-      // Add current message
-      conversationHistory.push({
-        role: 'user',
-        content: userMessage.content,
-      });
-
-      // Use streaming response
-      await callLLMWithStreaming(userMessage.content, conversationHistory);
+      // Pass the snapshot with user message to ensure it's included
+      await callLLMWithStreaming(userMessage.content, conversationHistory, updatedWithUserMsg);
+      
     } catch (error) {
-      console.error('Error sending message:', error);
-      
-      // Remove typing indicator
-      setMessages(prev => prev.filter(msg => msg.id !== 'typing-indicator'));
-      
-      // Add error message
-      const errorMessage = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant' as const,
-        content: "Sorry, I couldn't connect to the local LLM. Make sure LM Studio is running with API enabled.",
-        timestamp: new Date(),
-      };
-      
-      setMessages(prev => [...prev, errorMessage]);
+      console.error("Error handling message send:", error);
     } finally {
       setIsProcessing(false);
     }
-  };
+  }, [inputMessage, isProcessing, messages, callLLMWithStreaming]);
+
+  // Debugging: Log messages state on every render
+  useEffect(() => {
+    console.log("Current messages state:", messages);
+  });
+
+  // Debugging: Log conversationId on every render
+  useEffect(() => {
+    console.log("Current conversationId:", conversationId);
+  });
+
+  // Debugging: Log user state on every render
+  useEffect(() => {
+    console.log("Current user state:", user);
+  });
+
+  // Add state for managing the sidebar visibility on mobile
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+
+  // Add a function to start a new chat session
+  const startNewChat = useCallback(() => {
+    setMessages([
+      {
+        id: '1',
+        role: 'assistant',
+        content: 'Hello! I\'m your AI assistant. How can I help you today?',
+        timestamp: new Date(),
+      }
+    ]);
+    setConversationId(null);
+  }, []);
 
   return (
     <div className="min-h-screen bg-slate-50 flex">
-      <Sidebar />
+      <ChatSidebar 
+        currentConversationId={conversationId} 
+        startNewChat={startNewChat}
+        isOpen={isSidebarOpen}
+        closeSidebar={() => setIsSidebarOpen(false)}
+      />
+      
       <div className="flex-1 flex flex-col">
         <header className="bg-white shadow border-b">
-          <div className="mx-auto px-4 py-4 sm:px-6 lg:px-8">
-            <h1 className="text-2xl font-bold tracking-tight text-gray-900">Chat with AI Agent</h1>
+          <div className="mx-auto px-4 py-4 sm:px-6 lg:px-8 flex justify-between items-center">
+            <div className="flex items-center">
+              {/* Mobile menu button */}
+              <button 
+                className="md:hidden mr-4 text-gray-500"
+                onClick={() => setIsSidebarOpen(true)}
+              >
+                <span className="sr-only">Open sidebar</span>
+                <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" />
+                </svg>
+              </button>
+              <h1 className="text-2xl font-bold tracking-tight text-gray-900">Chat with AI Agent</h1>
+            </div>
+            
+            <Button 
+              variant="outline"
+              onClick={startNewChat}
+            >
+              New Chat
+            </Button>
           </div>
         </header>
         
@@ -310,6 +384,11 @@ export default function ChatWithAgent() {
                   msg.role === 'user' ? 'bg-blue-500 text-white' : 'bg-white border border-gray-200'
                 }`}>
                   <div className="text-sm whitespace-pre-wrap">{msg.content}</div>
+                  
+                  {/* Debug code to show message ID in development */}
+                  {process.env.NODE_ENV === 'development' && (
+                    <div className="text-xs opacity-50">id: {msg.id.substring(0, 8)}</div>
+                  )}
                   
                   {msg.sentiment && (
                     <div className={`text-xs mt-1 italic ${
@@ -342,6 +421,7 @@ export default function ChatWithAgent() {
             <div ref={messagesEndRef} />
           </div>
           
+          {/* Message input form - This was missing */}
           <div className="border-t pt-4">
             <form 
               onSubmit={(e) => {
@@ -371,6 +451,11 @@ export default function ChatWithAgent() {
             )}
           </div>
         </div>
+        
+        {/* Add debug button in development */}
+        {process.env.NODE_ENV === 'development' && (
+          <DebugButton messages={messages} conversationId={conversationId} />
+        )}
       </div>
     </div>
   );
