@@ -11,3 +11,34 @@
 body {
   color: rgb(var(--foreground-rgb));
 }
+
+/* Improve scrollbar appearance */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #c1c1c1;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #a8a8a8;
+}
+
+/* Fix common UI issues */
+.min-h-screen {
+  min-height: 100vh;
+  min-height: 100dvh; /* For modern browsers */
+}
+
+/* Ensure proper height for chat container */
+.chat-container {
+  height: calc(100vh - 120px);
+  height: calc(100dvh - 120px);
+}
