@@ -152,19 +152,29 @@ export default function ChatWithAgent() {
     addToCalendar,
     isLoading: isCalendarLoading 
   } = useGoogleCalendar();
-  
-  // Check for calendar connection params in URL
+    // Check for calendar connection params in URL
   useEffect(() => {
     const searchParams = new URLSearchParams(window.location.search);
     const calendarConnected = searchParams.get('calendar_connected');
     const calendarError = searchParams.get('calendar_error');
     const reason = searchParams.get('reason');
     
+    console.log('[Calendar Integration] URL params check:', { 
+      calendarConnected, 
+      calendarError, 
+      reason, 
+      hasScheduleData: !!scheduleData 
+    });
+    
     if (calendarConnected === 'true') {
+      console.log('[Calendar Integration] Successfully connected, schedule data:', scheduleData);
+      
       // If we have schedule data, try to add it to the calendar
       if (scheduleData) {
+        console.log('[Calendar Integration] Adding schedule to calendar after connection');
         handleAddToCalendar();
       } else {
+        console.log('[Calendar Integration] No schedule data available after connection');
         setMessages(prev => [...prev, {
           id: `system-${Date.now()}`,
           role: 'assistant',
@@ -204,20 +214,36 @@ export default function ChatWithAgent() {
       window.history.replaceState({}, '', '/dashboard/chat');
     }
   }, [scheduleData]);
-  
-  // Handle adding schedule to calendar
+    // Handle adding schedule to calendar
   const handleAddToCalendar = useCallback(async () => {
-    if (!scheduleData || !user) return;
+    console.log('[Calendar Integration] handleAddToCalendar called with:', { 
+      hasScheduleData: !!scheduleData, 
+      hasUser: !!user, 
+      isCalendarConnected 
+    });
+    
+    if (!scheduleData || !user) {
+      console.error('[Calendar Integration] Missing required data:', { 
+        scheduleData: !!scheduleData, 
+        user: !!user 
+      });
+      return;
+    }
     
     try {
       // Format the schedule data for Google Calendar
+      console.log('[Calendar Integration] Formatting schedule data:', scheduleData);
       const events = formatStudyScheduleForCalendar(scheduleData);
+      console.log('[Calendar Integration] Formatted events:', events.length, 'events generated');
       
       // If already connected, add events directly
       if (isCalendarConnected) {
+        console.log('[Calendar Integration] Calendar already connected, adding events directly');
         const result = await addToCalendar(events);
+        console.log('[Calendar Integration] Add to calendar result:', result);
         
         if (result.success) {
+          console.log('[Calendar Integration] Successfully added events to calendar');
           setMessages(prev => [...prev, {
             id: `system-${Date.now()}`,
             role: 'assistant',
@@ -225,14 +251,17 @@ export default function ChatWithAgent() {
             timestamp: new Date(),
           }]);
         } else {
+          console.error('[Calendar Integration] Failed to add events:', result.error);
           throw new Error(result.error);
         }
       } else {
         // Need to connect first - get the auth URL
+        console.log('[Calendar Integration] Not connected to calendar yet, getting auth URL');
         await getAuthUrl();
+        console.log('[Calendar Integration] Auth URL obtained:', !!googleAuthUrl);
       }
     } catch (error) {
-      console.error('Failed to add events to calendar:', error);
+      console.error('[Calendar Integration] Error adding events to calendar:', error);
       setMessages(prev => [...prev, {
         id: `system-${Date.now()}`,
         role: 'assistant',
@@ -240,6 +269,7 @@ export default function ChatWithAgent() {
         timestamp: new Date(),
       }]);
     } finally {
+      console.log('[Calendar Integration] Cleaning up UI state');
       setShowCalendarButtons(false);
       setScheduleData(null);
     }
@@ -309,8 +339,7 @@ export default function ChatWithAgent() {
           if (!trimmedLine || !trimmedLine.startsWith("data: ")) continue;
           
           const data = trimmedLine.substring(6);
-          if (data === "[DONE]") continue;
-            try {
+          if (data === "[DONE]") continue;            try {
             const parsed = JSON.parse(data);
             
             // Check if this is a scheduling request that needs to be handled differently
@@ -330,28 +359,55 @@ export default function ChatWithAgent() {
               }
               
               const responseData = await nonStreamingResponse.json();
-              accumulatedContent = responseData.text;
-              
-              // Check if this is a scheduling request
+              accumulatedContent = responseData.text;                // Check if this is a scheduling request
               if (responseData.isSchedulingRequest) {
-                // Try to extract schedule data
-                try {
-                  // Look for JSON-like content in the response
-                  const jsonMatch = accumulatedContent.match(/```json\s*({[\s\S]*?})\s*```/);
-                  if (jsonMatch && jsonMatch[1]) {
-                    const extractedJson = jsonMatch[1];
-                    const scheduleInfo = JSON.parse(extractedJson);
-                    
-                    // Store the extracted schedule data
-                    setScheduleData(scheduleInfo);
-                    
-                    // Show calendar options
-                    setShowCalendarButtons(true);
+                console.log('[Calendar Integration] Detected scheduling request in API response');
+                
+                // Try to get schedule data directly from API response first
+                if (responseData.scheduleData) {
+                  console.log("[Calendar Integration] Found schedule data in API response:", responseData.scheduleData);
+                  console.log("[Calendar Integration] Schedule subjects:", responseData.scheduleData.schedule?.length || 'none');
+                  
+                  // Store the schedule data from API
+                  setScheduleData(responseData.scheduleData);
+                  
+                  // Show calendar options
+                  setShowCalendarButtons(true);
+                  console.log("[Calendar Integration] Showing calendar buttons");
+                  
+                  // Make sure we have the Google auth URL
+                  console.log("[Calendar Integration] Getting Google auth URL");
+                  await getAuthUrl();
+                }
+                // Fallback to extracting from text if not in API response
+                else {
+                  console.log('[Calendar Integration] No direct schedule data, trying to extract from text');
+                  try {
+                    // Look for JSON-like content in the response
+                    const jsonMatch = accumulatedContent.match(/```json\s*({[\s\S]*?})\s*```/);
+                    if (jsonMatch && jsonMatch[1]) {
+                      const extractedJson = jsonMatch[1];
+                      console.log('[Calendar Integration] Found JSON data in text:', extractedJson.substring(0, 100) + '...');
+                      
+                      const scheduleInfo = JSON.parse(extractedJson);
+                      console.log('[Calendar Integration] Parsed schedule from text response');
+                      
+                      // Store the extracted schedule data
+                      setScheduleData(scheduleInfo);
+                      
+                      // Show calendar options
+                      setShowCalendarButtons(true);
+                      console.log("[Calendar Integration] Showing calendar buttons");
+                      
                       // Make sure we have the Google auth URL
-                    await getAuthUrl();
+                      console.log("[Calendar Integration] Getting Google auth URL");
+                      await getAuthUrl();
+                    } else {
+                      console.error('[Calendar Integration] No JSON schedule data found in text response');
+                    }
+                  } catch (jsonError) {
+                    console.error("[Calendar Integration] Error extracting schedule data:", jsonError);
                   }
-                } catch (jsonError) {
-                  console.error("Error extracting schedule data:", jsonError);
                 }
               }
               
@@ -379,8 +435,7 @@ export default function ChatWithAgent() {
           } catch (e) {
             console.error("Error parsing SSE data:", e);
           }
-        }
-      }
+        }      }
       
       const finalMessage = {
         id: Date.now().toString(),
@@ -417,7 +472,7 @@ export default function ChatWithAgent() {
       setIsStreaming(false);
       throw error;
     }
-  }, [saveEntireConversation]);
+  }, [saveEntireConversation, getAuthUrl]);
 
   const handleSendMessage = useCallback(async () => {
     if (!inputMessage.trim() || isProcessing) return;

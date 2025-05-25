@@ -6,7 +6,7 @@ import { v } from 'convex/values';
 // Save Google Calendar tokens for a user
 export const saveCalendarTokens = mutation({
   args: {
-    userId: v.string(),
+    userId: v.id('users'),
     accessToken: v.string(),
     refreshToken: v.optional(v.string()),
     expiryDate: v.number(),
@@ -45,7 +45,7 @@ export const saveCalendarTokens = mutation({
 // Get Google Calendar tokens for a user
 export const getCalendarTokens = query({
   args: {
-    userId: v.string(),
+    userId: v.id('users'),
   },
   handler: async (ctx, args) => {
     const { userId } = args;

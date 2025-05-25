@@ -95,15 +95,53 @@ export async function addToGoogleCalendar(
     recurrence?: string;
   }>
 ) {
+  console.log('[Calendar Server DEBUG] Starting calendar update at:', new Date().toISOString());
+  console.log('[Calendar Server DEBUG] Events to add:', events.length);
+  console.log('[Calendar Server DEBUG] First event sample:', events[0]);
+
+  console.log('[Calendar Server] Adding events to Google Calendar:', events.length, 'events');
+  console.log('[Calendar Server] Using OAuth credentials:', { 
+    clientId: clientId.substring(0, 10) + '...',
+    hasClientSecret: !!clientSecret,
+    hasAccessToken: !!tokens.access_token,
+    hasRefreshToken: !!tokens.refresh_token,
+    tokenExpiry: tokens.expiry_date ? new Date(tokens.expiry_date).toLocaleString() : 'N/A'
+  });
+
   const oauth2Client = new OAuth2Client(clientId, clientSecret, REDIRECT_URI);
   oauth2Client.setCredentials(tokens);
 
+  console.log('[Calendar Server] Initializing Google Calendar API client');
   const calendar = google.calendar({ version: "v3", auth: oauth2Client });
   
   const results = [];
+  let successCount = 0;
+  let failCount = 0;
   
-  for (const event of events) {
+  for (let i = 0; i < events.length; i++) {
+    const event = events[i];
+    console.log(`[Calendar Server DEBUG] Processing event ${i + 1}/${events.length}:`, {
+      summary: event.summary,
+      startTime: event.startTime,
+      endTime: event.endTime
+    });
+    
     try {
+      // Validate event dates
+      const startDate = new Date(event.startTime);
+      const endDate = new Date(event.endTime);
+      
+      if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+        throw new Error(`Invalid date format: Start: ${event.startTime}, End: ${event.endTime}`);
+      }
+      
+      console.log('[Calendar Server] Creating calendar event:', {
+        summary: event.summary,
+        startTime: startDate.toLocaleString(),
+        endTime: endDate.toLocaleString(),
+        hasRecurrence: !!event.recurrence
+      });
+      
       const calendarEvent = {
         summary: event.summary,
         description: event.description,
@@ -118,24 +156,34 @@ export async function addToGoogleCalendar(
         recurrence: event.recurrence ? [event.recurrence] : undefined,
       };
       
+      console.log('[Calendar Server] Sending event to Google Calendar API');
       const result = await calendar.events.insert({
         calendarId: "primary",
         requestBody: calendarEvent,
       });
       
+      console.log('[Calendar Server] Event created successfully:', result.data.id);
+      successCount++;
+      
       results.push({
         success: true,
         eventId: result.data.id,
         link: result.data.htmlLink,
+        summary: event.summary,
+        startTime: event.startTime
       });
     } catch (error) {
-      console.error("Error creating calendar event:", error);
+      console.error("[Calendar Server] Error creating calendar event:", error);
+      failCount++;
+      
       results.push({
         success: false,
         error: error instanceof Error ? error.message : String(error),
+        summary: event.summary
       });
     }
   }
   
+  console.log(`[Calendar Server] Calendar update complete: ${successCount} successes, ${failCount} failures`);
   return results;
 }

@@ -37,17 +37,30 @@ export async function GET(req: NextRequest) {
     }
     
     // Exchange code for tokens
-    const tokens = await getGoogleTokens(clientId, clientSecret, code);
-      // Store tokens in Convex
+    const tokens = await getGoogleTokens(clientId, clientSecret, code);    // Store tokens in Convex
     // Create a direct Convex client (we can't use hooks in API routes)
     const convex = new ConvexHttpClient(convexUrl);
     
-    await convex.mutation(api.calendar.saveCalendarTokens, {
+    console.log('[API] Saving tokens to Convex:', {
       userId,
-      accessToken: tokens.access_token || '',
-      refreshToken: tokens.refresh_token || '', // Handle null case
-      expiryDate: tokens.expiry_date || (Date.now() + 3600000), // Default 1 hour from now
+      hasAccessToken: !!tokens.access_token,
+      hasRefreshToken: !!tokens.refresh_token,
+      expiryDate: tokens.expiry_date,
     });
+    
+    try {
+      await convex.mutation(api.calendar.saveCalendarTokens, {
+        userId: userId as any, // Cast to any since we know this is a valid Convex ID
+        accessToken: tokens.access_token || '',
+        refreshToken: tokens.refresh_token || undefined, // Use undefined instead of empty string
+        expiryDate: tokens.expiry_date || (Date.now() + 3600000), // Default 1 hour from now
+      });
+      
+      console.log('[API] Successfully saved tokens to Convex');
+    } catch (error) {
+      console.error('[API] Failed to save tokens to Convex:', error);
+      throw error;
+    }
     
     console.log('[API] Successfully saved Google Calendar tokens for user:', userId);
     

@@ -25,13 +25,13 @@ export async function POST(req: NextRequest) {
       try {
         // Initialize LangChain agent
         const agent = await setupAgent("not-needed"); // LM Studio doesn't need an API key
-        
-        // Process with LangChain agent
+          // Process with LangChain agent
         const result = await processWithAgent(agent, message, conversationHistory || []);
         
         return NextResponse.json({ 
           text: result.text,
           isSchedulingRequest: true,
+          scheduleData: result.schedule // Include the schedule data
         });
       } catch (agentError) {
         console.error('[API] Error in LangChain agent processing:', agentError);

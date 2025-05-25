@@ -18,13 +18,13 @@ export async function POST(req: NextRequest) {
         
         // Process with simplified agent (non-streaming)
         const result = await processWithAgent(llm, message, conversationHistory || []);
-        
-        // If we got a valid result, return it
+          // If we got a valid result, return it
         if (result && result.text) {
           return new Response(
             `data: ${JSON.stringify({ 
               content: result.text,
-              isSchedulingRequest: true 
+              isSchedulingRequest: true,
+              scheduleData: result.schedule // Include the schedule data
             })}\n\ndata: [DONE]\n\n`,
             {
               headers: {
@@ -53,11 +53,12 @@ export async function POST(req: NextRequest) {
     
     let llmResponse = null;
     let errorMessages = [];
-    
-    // Try each endpoint
+      // Try each endpoint
     for (const baseUrl of endpoints) {
       try {
-        const LLM_API_URL = `${baseUrl}/v1/chat/completions`;
+        // Ensure proper URL construction without double /v1
+        const cleanBaseUrl = baseUrl.replace(/\/v1\/?$/, ''); // Remove trailing /v1 if present
+        const LLM_API_URL = `${cleanBaseUrl}/v1/chat/completions`;
         console.log(`[Stream] Trying LLM at: ${LLM_API_URL}`);
         
         // Handle conversation history correctly
@@ -74,8 +75,11 @@ export async function POST(req: NextRequest) {
           // Add the current message
           messages.push({ role: "user", content: message });
         }
+          // Connect to LM Studio with streaming enabled
+        // Use a much longer timeout for schedule generation - 2 minutes
+        const timeoutMs = hasSchedulingIntent ? 120000 : 60000;
+        console.log(`[Stream] Using timeout of ${timeoutMs}ms`);
         
-        // Connect to LM Studio with streaming enabled
         llmResponse = await fetch(LLM_API_URL, {
           method: 'POST',
           headers: {
@@ -85,10 +89,11 @@ export async function POST(req: NextRequest) {
             messages: messages,
             model: "mistral-7b-instruct-v0.3",
             temperature: 0.7,
-            max_tokens: 500,
+            // Use more tokens for scheduling requests
+            max_tokens: hasSchedulingIntent ? 1000 : 500,
             stream: true,
           }),
-          signal: AbortSignal.timeout(30000)
+          signal: AbortSignal.timeout(timeoutMs)
         });
         
         if (llmResponse.ok) {
@@ -117,11 +122,12 @@ export async function POST(req: NextRequest) {
           status: 500 
         }
       );
-    }
-
-    // Create a TransformStream to process the SSE data
+    }    // Create a TransformStream to process the SSE data
     const encoder = new TextEncoder();
     const decoder = new TextDecoder();
+    
+    // Set up error handling for the stream
+    let hasErrored = false;
     
     const transformStream = new TransformStream({
       start(controller) {
@@ -162,21 +168,66 @@ export async function POST(req: NextRequest) {
           }
         }
       },
-      
-      flush(controller) {
+        flush(controller) {
         console.log('[Stream] Flushing and sending final [DONE] signal');
+        
+        // If we haven't sent any error message yet and the stream errored, send a generic error
+        if (hasErrored) {
+          console.log('[Stream] Sending error message in flush');
+          controller.enqueue(encoder.encode(`data: ${JSON.stringify({ 
+            error: "Connection timed out or was interrupted. Please try again." 
+          })}\n\n`));
+        }
+        
         controller.enqueue(encoder.encode("data: [DONE]\n\n"));
       }
-    });
-
-    // Return the transformed stream response with proper SSE headers
-    return new Response(llmResponse.body?.pipeThrough(transformStream), {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        'Connection': 'keep-alive',
-      },
-    });
+    });    // Note: We can't directly monitor stream errors with ReadableStream API
+    // Instead we rely on try/catch and the transformStream for error handling
+    
+    try {    try {
+      // Use a more robust way to handle errors - wrap in try/catch
+      // Return the transformed stream response with proper SSE headers
+      return new Response(llmResponse.body?.pipeThrough(transformStream), {
+        headers: {
+          'Content-Type': 'text/event-stream',
+          'Cache-Control': 'no-cache',
+          'Connection': 'keep-alive',
+        },
+      });
+    } catch (streamError) {
+      console.error('[Stream] Error setting up stream pipeline:', streamError);
+      
+      // Fall back to a simple non-streaming response
+      return new Response(
+        `data: ${JSON.stringify({ 
+          error: "Failed to set up streaming connection. Please try again with a shorter request." 
+        })}\n\ndata: [DONE]\n\n`,
+        {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          }
+        }
+      );
+    }
+    } catch (streamError) {
+      console.error('[Stream] Error setting up stream pipeline:', streamError);
+      
+      // Fall back to a simple non-streaming response
+      return new Response(
+        `data: ${JSON.stringify({ 
+          error: "Failed to set up streaming connection. Please try again with a shorter request." 
+        })}\n\ndata: [DONE]\n\n`,
+        {
+          headers: {
+            'Content-Type': 'text/event-stream',
+            'Cache-Control': 'no-cache',
+            'Connection': 'keep-alive',
+          }
+        }
+      );
+    }
   } catch (error) {
     console.error('[Stream] Error in streaming LLM route:', error);
     return new Response(

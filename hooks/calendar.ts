@@ -12,6 +12,14 @@ export function useGoogleCalendar() {
   const [authUrl, setAuthUrl] = useState('');
   const [error, setError] = useState<string | null>(null);
   
+  console.log('[Calendar Hook DEBUG] Hook state:', {
+    hasUser: !!user,
+    isLoading,
+    isConnected,
+    hasAuthUrl: !!authUrl,
+    error
+  });
+
   // Get tokens from Convex
   const calendarTokens = useQuery(
     api.calendar.getCalendarTokens, 
@@ -23,11 +31,18 @@ export function useGoogleCalendar() {
   
   // Check if calendar is connected
   useEffect(() => {
-    if (calendarTokens) {
+    if (calendarTokens && calendarTokens.accessToken) {
       setIsConnected(true);
+      // Reset auth URL when connected
+      setAuthUrl('');
     } else {
       setIsConnected(false);
     }
+    console.log('[Calendar Hook DEBUG] Token state:', {
+      hasTokens: !!calendarTokens,
+      hasAccessToken: calendarTokens?.accessToken,
+      expiryDate: calendarTokens?.expiryDate,
+    });
   }, [calendarTokens]);
   
   // Get Google auth URL
@@ -50,18 +65,31 @@ export function useGoogleCalendar() {
       setIsLoading(false);
     }
   }, []);
-  
-  // Add events to calendar
+    // Add events to calendar
   const addToCalendar = useCallback(async (events: any[]) => {
+    console.log('[Calendar Hook DEBUG] addToCalendar called:', {
+      eventsCount: events.length,
+      hasUser: !!user,
+      hasTokens: !!calendarTokens,
+      isConnected
+    });
+    
     if (!user || !calendarTokens) {
+      console.error('[Calendar Hook] Not connected to Google Calendar:', 
+                   { hasUser: !!user, hasTokens: !!calendarTokens });
       setError('Not connected to Google Calendar');
       return { success: false, error: 'Not connected to Google Calendar' };
     }
+    
+    console.log('[Calendar Hook] User and tokens available, proceeding with calendar add');
+    console.log('[Calendar Hook] Access token exists:', !!calendarTokens.accessToken);
+    console.log('[Calendar Hook] Token expiry:', new Date(calendarTokens.expiryDate).toLocaleString());
     
     setIsLoading(true);
     setError(null);
     
     try {
+      console.log('[Calendar Hook] Sending request to /api/calendar/events');
       const response = await fetch('/api/calendar/events', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -75,15 +103,20 @@ export function useGoogleCalendar() {
         }),
       });
       
+      console.log('[Calendar Hook] Response status:', response.status);
       const data = await response.json();
+      console.log('[Calendar Hook] API response data:', data);
       
       if (!response.ok) {
+        console.error('[Calendar Hook] API returned error:', data.error);
         throw new Error(data.error || 'Failed to add events to calendar');
       }
       
+      console.log('[Calendar Hook] Events successfully added to calendar');
       return { success: true, data };
     } catch (err) {
       const errorMsg = err instanceof Error ? err.message : 'Failed to add events to calendar';
+      console.error('[Calendar Hook] Error adding events to calendar:', errorMsg);
       setError(errorMsg);
       return { success: false, error: errorMsg };
     } finally {
